@@ -48,7 +48,7 @@ class GoogleSheet {
           {
             repeatCell: {
               range: all,
-              cell: { userEnteredFormat: { wrapStrategy: 'CLIP', verticalAlignment: 'MIDDLE' } },
+              cell: { userEnteredFormat: { wrapStrategy: 'CLIP', verticalAlignment: 'TOP' } },
               fields: 'userEnteredFormat(wrapStrategy,verticalAlignment)',
             },
           },

@@ -34,7 +34,7 @@ class SyncEngine {
 
     const header = fields.map((f) => f.field_name);
     const rows = records.map((r) =>
-      fields.map((f) => toPlainValue(r.fields[f.field_name], f, this.timeZone)),
+      fields.map((f) => toSheetValue(r.fields[f.field_name], f, this.timeZone)),
     );
 
     await this.sheet.replaceAll([header, ...rows]);
@@ -125,6 +125,16 @@ class SyncEngine {
 }
 
 // ---------- helpers ----------
+
+/** Like toPlainValue, but URL fields become clickable =HYPERLINK() cells. */
+function toSheetValue(value, field, timeZone) {
+  if (field.type === FieldType.URL && value && typeof value === 'object' && value.link) {
+    const esc = (s) => String(s).replace(/"/g, '""');
+    const label = value.text || value.link;
+    return `=HYPERLINK("${esc(value.link)}","${esc(label)}")`;
+  }
+  return toPlainValue(value, field, timeZone);
+}
 
 function readSpreadsheet(filePath) {
   const wb = XLSX.read(fs.readFileSync(filePath), { type: 'buffer', cellDates: true });
