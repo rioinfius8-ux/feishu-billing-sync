@@ -51,7 +51,8 @@ function createClient(config) {
     appSecret: config.appSecret,
     appType: lark.AppType.SelfBuild,
     domain: config.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
-    loggerLevel: lark.LoggerLevel.fatal, // errors are handled and logged by our own code
+    // Errors are handled and logged by our own code. (loggerLevel: fatal doesn't work: it's 0 and the SDK treats it as unset.)
+    logger: { error() {}, warn() {}, info() {}, debug() {}, trace() {} },
   });
 }
 
