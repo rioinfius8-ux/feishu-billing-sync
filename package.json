@@ -1,10 +1,12 @@
 {
   "name": "feishu-billing-sync",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Import Excel/CSV billing files into Feishu Base and sync Feishu Base to Google Sheets",
+  "main": "src/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/index.js",
+    "once": "node src/index.js --once",
+    "sync": "node src/index.js --sync-only"
   },
   "keywords": [],
   "author": "",
