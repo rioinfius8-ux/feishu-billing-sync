@@ -3,8 +3,10 @@ const { google } = require('googleapis');
 
 class GoogleSheet {
   constructor(config) {
-    const auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(fs.readFileSync(config.keyFile, 'utf8')),
+    const key = JSON.parse(fs.readFileSync(config.keyFile, 'utf8'));
+    const auth = new google.auth.JWT({
+      email: key.client_email,
+      key: key.private_key,
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
     });
     this.sheets = google.sheets({ version: 'v4', auth });
