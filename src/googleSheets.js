@@ -12,6 +12,7 @@ class GoogleSheet {
     this.sheets = google.sheets({ version: 'v4', auth });
     this.spreadsheetId = config.spreadsheetId;
     this.sheetName = config.sheetName;
+    this.hiddenColumns = new Set((config.hiddenColumns || []).map(normalize));
   }
 
   get range() {
@@ -34,12 +35,12 @@ class GoogleSheet {
   }
 
   /** Compact layout: single-line rows, bold frozen header, sensible column widths. */
-  async formatSheet(sheetId, rowCount, colCount) {
+  async formatSheet(sheetId, rowCount, colCount, header = []) {
     const ROW_HEIGHT = 24;
     const MAX_COL_WIDTH = 260;
     const MIN_COL_WIDTH = 80;
     const all = { sheetId };
-    const header = { sheetId, startRowIndex: 0, endRowIndex: 1 };
+    const headerRange = { sheetId, startRowIndex: 0, endRowIndex: 1 };
 
     await this.sheets.spreadsheets.batchUpdate({
       spreadsheetId: this.spreadsheetId,
@@ -54,7 +55,7 @@ class GoogleSheet {
           },
           {
             repeatCell: {
-              range: header,
+              range: headerRange,
               cell: { userEnteredFormat: { textFormat: { bold: true } } },
               fields: 'userEnteredFormat.textFormat.bold',
             },
@@ -102,6 +103,18 @@ class GoogleSheet {
         });
       }
     });
+    // Hide/unhide columns by header name (HIDDEN_COLUMNS in .env).
+    if (this.hiddenColumns.size) {
+      header.slice(0, colCount).forEach((name, i) => {
+        requests.push({
+          updateDimensionProperties: {
+            range: { sheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+            properties: { hiddenByUser: this.hiddenColumns.has(normalize(name)) },
+            fields: 'hiddenByUser',
+          },
+        });
+      });
+    }
     if (requests.length) {
       await this.sheets.spreadsheets.batchUpdate({
         spreadsheetId: this.spreadsheetId,
@@ -125,8 +138,12 @@ class GoogleSheet {
       requestBody: { values: rows },
     });
     const colCount = Math.max(...rows.map((r) => r.length));
-    await this.formatSheet(sheetId, rows.length, colCount);
+    await this.formatSheet(sheetId, rows.length, colCount, rows[0]);
   }
+}
+
+function normalize(s) {
+  return String(s).trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 module.exports = { GoogleSheet };

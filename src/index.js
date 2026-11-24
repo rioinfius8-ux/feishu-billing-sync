@@ -54,6 +54,7 @@ const config = {
     spreadsheetId: required('GOOGLE_SPREADSHEET_ID'),
     keyFile: path.resolve(ROOT, required('GOOGLE_SERVICE_ACCOUNT_KEY_FILE')),
     sheetName: (process.env.GOOGLE_SHEET_NAME || 'Sheet1').trim(),
+    hiddenColumns: (process.env.HIDDEN_COLUMNS || '').split(',').map((s) => s.trim()).filter(Boolean),
   },
   intervalMinutes: Number(process.env.SYNC_INTERVAL_MINUTES || 10),
   timeZone: process.env.TIMEZONE || 'Asia/Manila',
