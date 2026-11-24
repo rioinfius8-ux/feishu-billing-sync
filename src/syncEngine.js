@@ -4,8 +4,9 @@ const XLSX = require('xlsx');
 const { FieldType, WRITABLE_TYPES, toPlainValue } = require('./feishu');
 
 class SyncEngine {
-  constructor({ feishu, sheet, logger, timeZone, uniqueKeyField, dirs }) {
+  constructor({ feishu, sheet, logger, timeZone, uniqueKeyField, dirs, approval }) {
     this.feishu = feishu;
+    this.approval = approval || null;
     this.sheet = sheet;
     this.log = logger;
     this.timeZone = timeZone;
@@ -36,6 +37,12 @@ class SyncEngine {
     const rows = records.map((r) =>
       fields.map((f) => toSheetValue(r.fields[f.field_name], f, this.timeZone)),
     );
+
+    if (this.approval) {
+      const extra = await this.approval.valuesFor(records);
+      header.push(...this.approval.columns);
+      rows.forEach((row, i) => row.push(...extra[i]));
+    }
 
     await this.sheet.replaceAll([header, ...rows]);
     this.log.info(`Synced ${records.length} record(s) from Feishu to Google Sheets.`);

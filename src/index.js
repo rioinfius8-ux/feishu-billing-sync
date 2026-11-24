@@ -5,6 +5,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { FeishuBase } = require('./feishu');
 const { GoogleSheet } = require('./googleSheets');
 const { SyncEngine } = require('./syncEngine');
+const { ApprovalSteps, parseSteps } = require('./approval');
 
 const ROOT = path.join(__dirname, '..');
 const DIRS = {
@@ -66,8 +67,15 @@ if (!fs.existsSync(config.google.keyFile)) {
   process.exit(1);
 }
 
+const feishu = new FeishuBase(config.feishu);
+const steps = parseSteps(process.env.APPROVAL_STEPS);
+const approval = steps.length
+  ? new ApprovalSteps({ client: feishu.client, steps, timeZone: config.timeZone, logger })
+  : null;
+
 const engine = new SyncEngine({
-  feishu: new FeishuBase(config.feishu),
+  feishu,
+  approval,
   sheet: new GoogleSheet(config.google),
   logger,
   timeZone: config.timeZone,

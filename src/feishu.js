@@ -51,6 +51,7 @@ function createClient(config) {
     appSecret: config.appSecret,
     appType: lark.AppType.SelfBuild,
     domain: config.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
+    loggerLevel: lark.LoggerLevel.fatal, // errors are handled and logged by our own code
   });
 }
 
