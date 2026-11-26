@@ -253,10 +253,19 @@ test('unmapped nodes (Bank Handle, SI/OR) do not fill step columns', () => {
   ] };
   const cells = sync.cells(bankHandle);
   assert.strictEqual(cells[1], ''); // Bank Maked
+  assert.strictEqual(cells[2], ''); // FS Final Checking
   assert.strictEqual(cells[3], ''); // Bank Released
+  assert.strictEqual(cells[4], 'Done'); // approved rule: Bank Handle requests keep step Status Done
+  assert.ok(cells.every((c) => c !== '2026-01-05 16:16'), 'Bank Handle time must not appear in any step column');
   const siOr = { status: 'APPROVED', tasks: [
     { node: 'QB Handle', status: 'APPROVED', end: t }, { node: 'Bank Maker', status: 'APPROVED', end: t },
     { node: 'Bank Proofs/Approval', status: 'APPROVED', end: t }, { node: 'SI/OR and Bank Refund', status: 'APPROVED', end: t + 1e8 },
   ] };
-  assert.strictEqual(sync.cells(siOr)[3], '2026-01-05 16:16'); // Bank Released stays the Bank Proofs time
+  const si = sync.cells(siOr);
+  assert.strictEqual(si[3], '2026-01-05 16:16'); // Bank Released stays the Bank Proofs time
+  assert.strictEqual(si[4], 'Done');
+  // A pending SI/OR step must not change any step column or the step Status.
+  const siPending = { status: 'APPROVED', tasks: siOr.tasks.map((x) => (x.node === 'SI/OR and Bank Refund' ? { ...x, status: 'PENDING', end: 0 } : x)) };
+  assert.deepStrictEqual(sync.cells(siPending), si);
+  assert.deepStrictEqual(STEPS.map((s) => s.node), ['QB Handle', 'Bank Maker', 'FS Final Checking', 'Bank Proofs/Approval']);
 });
