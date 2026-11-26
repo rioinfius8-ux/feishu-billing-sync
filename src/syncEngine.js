@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
 const { FieldType, WRITABLE_TYPES, toPlainValue } = require('./feishu');
+const { instanceCodeFromBase, formatDateTime, STATUS_LABEL } = require('./approval');
 
 class SyncEngine {
   constructor({ feishu, sheet, logger, timeZone, uniqueKeyField, dirs, approval }) {
@@ -34,18 +35,39 @@ class SyncEngine {
     const records = await this.feishu.listRecords();
 
     const header = fields.map((f) => f.field_name);
-    const rows = records.map((r) =>
-      fields.map((f) => toSheetValue(r.fields[f.field_name], f, this.timeZone)),
-    );
+    const baseRow = (r) => fields.map((f) => toSheetValue(r.fields[f.field_name], f, this.timeZone));
 
+    let rows;
     if (this.approval) {
-      const extra = await this.approval.valuesFor(records);
+      const extraCodes = records.map((r) => instanceCodeFromBase(r.fields)).filter(Boolean);
+      const instances = await this.approval.sync({ extraCodes });
+      rows = buildApprovalRows({ header, records, instances, baseRow, approval: this.approval });
       header.push(...this.approval.columns);
-      rows.forEach((row, i) => row.push(...extra[i]));
+    } else {
+      rows = records.map(baseRow);
     }
 
-    await this.sheet.replaceAll([header, ...rows]);
-    this.log.info(`Synced ${records.length} record(s) from Feishu to Google Sheets.`);
+    await this.safeReplace([header, ...rows]);
+    this.lastSyncedRows = rows.length;
+    this.log.info(`Synced ${rows.length} row(s) to Google Sheets (${records.length} Base record(s) merged).`);
+  }
+
+  /** Backs up the tab before the first approval-based write, and whenever the row count would shrink. */
+  async safeReplace(rows) {
+    const existing = await this.sheet.countDataRows();
+    const incoming = rows.length - 1;
+    const state = this.approval && this.approval.state;
+    const firstMigration = state && !state.sheetMigratedAt;
+    if (existing > 0 && (firstMigration || incoming < existing)) {
+      const reason = firstMigration ? 'pre-approval-migration' : `rows-${existing}-to-${incoming}`;
+      const title = await this.sheet.backupTab(reason);
+      this.log.warn(`Backed up "${this.sheet.sheetName}" to "${title}" before writing (${reason}).`);
+    }
+    await this.sheet.replaceAll(rows);
+    if (firstMigration) {
+      state.sheetMigratedAt = new Date().toISOString();
+      this.approval.saveState();
+    }
   }
 
   // ---------- Excel/CSV file -> Feishu Base ----------
@@ -133,6 +155,65 @@ class SyncEngine {
 
 // ---------- helpers ----------
 
+// Existing sheet columns that the Approval API fills (approval data wins over Base data).
+const APPROVAL_FIELD_COLUMNS = {
+  requestNo: 'Request No.',
+  approvalName: 'Approval process',
+  status: 'Status',
+  submitted: 'Submitted at',
+  completed: 'Completed at',
+  requester: 'Requester',
+};
+
+/**
+ * One row per approval instance (keyed by instance_code), merged with the matching Base record
+ * (matched by SourceID instance code, then by serial number). Base records with no matching
+ * instance are kept as Base-only rows. Sorted newest first.
+ */
+function buildApprovalRows({ header, records, instances, baseRow, approval }) {
+  const col = {};
+  for (const [key, name] of Object.entries(APPROVAL_FIELD_COLUMNS)) col[key] = header.indexOf(name);
+
+  const byCode = new Map();
+  const bySerial = new Map();
+  for (const r of records) {
+    const code = instanceCodeFromBase(r.fields);
+    if (code) byCode.set(code, r);
+    const serial = String(toPlainValue(r.fields['Request No.'], { type: FieldType.URL }) || '').trim();
+    if (serial) bySerial.set(serial, r);
+  }
+
+  const used = new Set();
+  const seen = new Set();
+  const out = [];
+  const sorted = [...instances].sort((a, b) => b.startTime - a.startTime);
+
+  for (const inst of sorted) {
+    const code = String(inst.code).toUpperCase();
+    if (seen.has(code)) continue; // never emit the same instance twice
+    seen.add(code);
+
+    const base = byCode.get(code) || bySerial.get(inst.serial);
+    if (base) used.add(base);
+    const row = base ? baseRow(base) : header.map(() => '');
+    const set = (key, value) => {
+      if (col[key] >= 0 && value !== undefined && value !== '') row[col[key]] = value;
+    };
+    if (!base) set('requestNo', inst.serial);
+    set('approvalName', inst.approvalName);
+    set('status', STATUS_LABEL[inst.status] || inst.status);
+    set('submitted', formatDateTime(inst.startTime, approval.timeZone));
+    if (col.completed >= 0) row[col.completed] = formatDateTime(inst.endTime, approval.timeZone);
+    if (col.requester >= 0 && !row[col.requester]) row[col.requester] = approval.requesterName(inst);
+    out.push([...row, ...approval.cells(inst)]);
+  }
+
+  for (const r of records) {
+    if (!used.has(r)) out.push([...baseRow(r), ...approval.columns.map(() => '')]);
+  }
+  return out;
+}
+
 /** Like toPlainValue, but URL fields become clickable =HYPERLINK() cells. */
 function toSheetValue(value, field, timeZone) {
   if (field.type === FieldType.URL && value && typeof value === 'object' && value.link) {
@@ -194,4 +275,4 @@ function moveFile(src, destDir) {
   }
 }
 
-module.exports = { SyncEngine };
+module.exports = { SyncEngine, buildApprovalRows, APPROVAL_FIELD_COLUMNS };

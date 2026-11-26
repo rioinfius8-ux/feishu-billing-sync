@@ -5,7 +5,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { FeishuBase } = require('./feishu');
 const { GoogleSheet } = require('./googleSheets');
 const { SyncEngine } = require('./syncEngine');
-const { ApprovalSteps, parseSteps } = require('./approval');
+const { ApprovalSync, parseSteps } = require('./approval');
 
 const ROOT = path.join(__dirname, '..');
 const DIRS = {
@@ -68,9 +68,22 @@ if (!fs.existsSync(config.google.keyFile)) {
 }
 
 const feishu = new FeishuBase(config.feishu);
-const steps = parseSteps(process.env.APPROVAL_STEPS);
-const approval = steps.length
-  ? new ApprovalSteps({ client: feishu.client, steps, timeZone: config.timeZone, logger })
+const approvalCode = (process.env.APPROVAL_CODE || '').trim();
+const backfillFrom = Date.parse(process.env.APPROVAL_BACKFILL_FROM || '2026-01-01T00:00:00+08:00');
+if (approvalCode && Number.isNaN(backfillFrom)) {
+  logger.error('APPROVAL_BACKFILL_FROM is not a valid date (use e.g. 2026-01-01T00:00:00+08:00)');
+  process.exit(1);
+}
+const approval = approvalCode
+  ? new ApprovalSync({
+      client: feishu.client,
+      approvalCode,
+      backfillFrom,
+      steps: parseSteps(process.env.APPROVAL_STEPS),
+      timeZone: config.timeZone,
+      logger,
+      stateFile: path.join(ROOT, 'data', 'approval-state.json'),
+    })
   : null;
 
 const engine = new SyncEngine({

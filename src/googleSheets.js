@@ -123,6 +123,32 @@ class GoogleSheet {
     }
   }
 
+  /** Number of non-empty rows below the header (0 if the tab doesn't exist). */
+  async countDataRows() {
+    try {
+      const res = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `${this.range}!A:A`,
+      });
+      return Math.max(0, (res.data.values || []).length - 1);
+    } catch (err) {
+      if (/Unable to parse range/i.test(err.message)) return 0;
+      throw err;
+    }
+  }
+
+  /** Duplicates the tab as "<name> backup <timestamp> <reason>". Returns the new tab title. */
+  async backupTab(reason) {
+    const sheetId = await this.ensureSheet();
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '');
+    const title = `${this.sheetName} backup ${stamp} ${reason}`.slice(0, 95);
+    await this.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: this.spreadsheetId,
+      requestBody: { requests: [{ duplicateSheet: { sourceSheetId: sheetId, newSheetName: title, insertSheetIndex: 99 } }] },
+    });
+    return title;
+  }
+
   /** Replaces the whole tab with the given rows (first row = headers). */
   async replaceAll(rows) {
     const sheetId = await this.ensureSheet();

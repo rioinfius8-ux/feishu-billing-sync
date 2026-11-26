@@ -37,6 +37,10 @@ Keeps billing / payment request data in sync between **Feishu Base (多维表格
    | `FEISHU_DOMAIN` | `feishu` | Use `lark` for larksuite.com tenants |
    | `SYNC_INTERVAL_MINUTES` | `10` | How often to sync Feishu to Google Sheets |
    | `TIMEZONE` | `Asia/Manila` | Time zone used to format dates |
+   | `APPROVAL_CODE` | *(empty)* | Approval definition code. When set, the Feishu Approval API becomes the source of rows (see below). |
+   | `APPROVAL_BACKFILL_FROM` | `2026-01-01T00:00:00+08:00` | Where the first approval scan starts |
+   | `APPROVAL_STEPS` | *(empty)* | Step columns, as `Column=Approval node name;...` |
+   | `HIDDEN_COLUMNS` | *(empty)* | Comma-separated column names to hide in Google Sheets |
    | `UNIQUE_KEY_FIELD` | *(empty)* | Feishu field used as a unique ID (e.g. `Request No.`). When set, imported rows update matching records instead of creating duplicates. |
 
 3. **Grant access**
@@ -49,11 +53,41 @@ Keeps billing / payment request data in sync between **Feishu Base (多维表格
 npm start       # run continuously: watch imports/incoming and sync every N minutes
 npm run once    # import pending files, sync once, then exit
 npm run sync    # sync Feishu → Google Sheets only
+npm test        # unit tests (no network)
 ```
 
 Logs are printed to the console and written to `logs/sync-YYYY-MM-DD.log`.
 
 ## How it works
+
+### Feishu Approval → Google Sheets (when `APPROVAL_CODE` is set)
+
+When `APPROVAL_CODE` is set, the Feishu Approval API is the primary source of rows. Each sync:
+
+1. **Lists instance codes.** Calls `GET /approval/v4/instances` in 10-hour creation-time windows (the documented maximum), following `page_token`. The first run backfills from `APPROVAL_BACKFILL_FROM`. Later runs resume from the saved cursor minus a 1-hour overlap.
+2. **Fetches details.** Calls `GET /approval/v4/instances/:instance_id` for new instances and for any not yet in a final state (APPROVED, REJECTED, CANCELED or DELETED).
+3. **Writes one row per instance.** Rows are keyed by `instance_code`, so an instance never appears twice. Each row is merged with its Feishu Base record when one exists, matched by the instance code in `SourceID`, then by serial number. Approval data fills:
+   - `Request No.`
+   - `Approval process`
+   - `Status`
+   - `Submitted at`
+   - `Completed at`
+   - `Requester`, only if the Base record doesn't already have it
+
+   All other columns come from Base. Base records with no matching instance are kept as Base-only rows.
+4. **Fills the step columns** from `APPROVAL_STEPS`:
+   - Each step column shows the step's completion time, `Pending`, or blank if the step isn't in the flow.
+   - `Status` is `Done` once every mapped step that appears in an approved instance is done. Otherwise it is `Pending`.
+
+Progress and an instance cache are stored in `data/approval-state.json`, which is git-ignored. It is written atomically after every window, so an interrupted backfill resumes where it stopped. Delete the file to rebuild from scratch.
+
+API calls retry with exponential backoff on rate limits, HTTP 429 and 5xx responses, and network errors. List calls are throttled below the 100 requests/min limit.
+
+**Safety:** the tab is duplicated to a `… backup …` tab:
+- before the first approval-based write
+- whenever a sync would reduce the number of rows
+
+Required Feishu app scope: `approval:approval:readonly`. Optional: a contact read scope such as `contact:user.base:readonly`, to fill requester names for requests not in Base.
 
 ### Feishu Base → Google Sheets
 
@@ -82,6 +116,7 @@ Logs are printed to the console and written to `logs/sync-YYYY-MM-DD.log`.
 src/
   index.js         entry point: config, logger, file watcher, schedule
   syncEngine.js    import (file → Feishu) and sync (Feishu → Sheets) logic
+  approval.js      Approval API listing/backfill, details, state, step columns
   feishu.js        Feishu Base client and value conversion
   googleSheets.js  Google Sheets client and tab formatting
 imports/
@@ -89,6 +124,8 @@ imports/
   processed/       imported files
   failed/          files that failed to import
 credentials/       service account key (git-ignored)
+data/              approval sync state and cache (git-ignored)
+test/              unit tests (node --test)
 logs/              daily log files (git-ignored)
 ```
 
