@@ -194,7 +194,10 @@ class ApprovalSync {
     const s = this.state;
     for (const code of extraCodes) if (!s.instances[code]) s.instances[code] = { code, extra: true };
 
-    const todo = Object.values(s.instances).filter((i) => !FINAL_STATUSES.has(i.status) && !i.notFound);
+    const todo = Object.values(s.instances).filter(
+      (i) => !i.notFound && (!FINAL_STATUSES.has(i.status) || i.formVersion !== FORM_VERSION),
+    );
+    if (todo.length > 50) this.log.info(`Approval: fetching details for ${todo.length} instance(s)...`);
     let ok = 0;
     let failed = 0;
     let sinceSave = 0;
@@ -303,8 +306,99 @@ class ApprovalSync {
 
 // ---------- helpers ----------
 
+// Bump when extractFormFields changes so cached final instances get re-fetched once.
+const FORM_VERSION = 1;
+
+/**
+ * Converts the approval form (JSON string from GET /approval/v4/instances/:id with locale en-US)
+ * into Base-shaped raw values keyed by the existing Base/Sheet column names, so they can be
+ * formatted with the same rules as Base values. Widgets with no matching column are listed
+ * in `_unmapped`.
+ */
+function extractFormFields(formJson) {
+  let form;
+  try {
+    form = typeof formJson === 'string' ? JSON.parse(formJson || '[]') : formJson || [];
+  } catch {
+    return {};
+  }
+  const out = {};
+  const unmapped = [];
+  const ms = (s) => {
+    const t = Date.parse(s);
+    return Number.isNaN(t) ? undefined : t;
+  };
+  const put = (k, v) => {
+    if (v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length)) out[k] = v;
+  };
+
+  for (const w of Array.isArray(form) ? form : []) {
+    const name = String(w.name || '').trim();
+    const v = w.value;
+    switch (w.type) {
+      case 'dateInterval':
+        if (v && typeof v === 'object') {
+          put('Billing Start Date', ms(v.start));
+          put('Billing End Date', ms(v.end));
+          if (v.interval !== undefined && v.interval !== null) put('Duration', String(v.interval));
+        }
+        break;
+      case 'date':
+        put(name, ms(v));
+        break;
+      case 'connect': // related approvals: serial numbers are in ext.serialIDs
+        put(name, w.ext && w.ext.serialIDs ? String(w.ext.serialIDs) : undefined);
+        break;
+      case 'image':
+        put(name, Array.isArray(v) && v.length ? `${v.length} image(s)` : undefined);
+        break;
+      case 'attachmentV2':
+      case 'attachment':
+        put(name, Array.isArray(v) && v.length ? `${v.length} attachment(s)` : undefined);
+        break;
+      case 'fieldList':
+        put(name, formatFieldList(v));
+        break;
+      case 'checkboxV2':
+      case 'checkbox':
+        put(name, Array.isArray(v) ? v.map(String) : v);
+        break;
+      default:
+        if (v === null || v === undefined || typeof v === 'object') {
+          if (v && typeof v === 'object') unmapped.push(name);
+          break;
+        }
+        put(name, typeof v === 'number' ? v : String(v));
+    }
+  }
+  if (unmapped.length) out._unmapped = unmapped;
+  return out;
+}
+
+/** "Name:value | Name:value" per row (Base format); rows separated by a line break. */
+function formatFieldList(rows) {
+  if (!Array.isArray(rows) || !rows.length) return undefined;
+  const cell = (c) => {
+    const v = c.value;
+    if (v === null || v === undefined) return '';
+    if (c.type === 'amount') return `${Number(v).toFixed(6)} ${(c.ext && c.ext.currency) || ''}`.trim();
+    if (c.type === 'formula' && typeof v === 'number') return v.toFixed(6);
+    if (Array.isArray(v)) return v.join(', ');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
+  const text = rows
+    .filter(Array.isArray)
+    .map((row) => row.map((c) => `${String(c.name || '').trim()}:${cell(c)}`).join(' | '))
+    .filter(Boolean)
+    .join('\n');
+  return text || undefined;
+}
+
 function summarize(d) {
   return {
+    fields: extractFormFields(d.form),
+    formVersion: FORM_VERSION,
     code: d.instance_code,
     serial: d.serial_number || '',
     approvalName: d.approval_name || '',
@@ -375,6 +469,7 @@ module.exports = {
   StateStore,
   parseSteps,
   instanceCodeFromBase,
+  extractFormFields,
   formatDateTime,
   STATUS_LABEL,
   WINDOW_MS,

@@ -174,3 +174,89 @@ test('buildApprovalRows merges Base, keeps Base-only rows, no duplicates', () =>
   assert.strictEqual(rows[0][2], 'Payment Request');
   assert.strictEqual(rows[0].length, header.length + 5);
 });
+
+// ---------- form field mapping ----------
+const { extractFormFields } = require('../src/approval');
+
+const FORM = [
+  { name: 'Related Approvals', type: 'connect', ext: { serialIDs: '202610060003' }, value: ['63819018-9507-4F7F-BC51-2412FDF82B98'] },
+  { name: 'Payment Urgent', type: 'radioV2', value: 'Urgent' },
+  { name: 'Belongs To', type: 'checkboxV2', value: ['Project'] },
+  { name: 'Project Location', type: 'checkboxV2', value: ['ALBAY', 'CAMSUR'] },
+  { name: 'DateInterval', type: 'dateInterval', value: { start: '2026-09-01T00:00:00+08:00', end: '2026-09-30T00:00:00+08:00', interval: 30 } },
+  { name: 'Due Date', type: 'date', value: '2026-10-29T00:00:00+08:00' },
+  { name: 'PAF NO.(Internal)', type: 'input', value: 'I801101' },
+  { name: 'Payment Details -Albay', type: 'fieldList', value: [[
+    { name: 'Project', type: 'radioV2', value: 'SLI-PR' },
+    { name: 'Payable Amount-Gross', type: 'amount', ext: { currency: 'PHP' }, value: 364800 },
+    { name: '2307 Rate', type: 'radioV2', value: '0%' },
+    { name: 'VAT Amount', type: 'amount', ext: { currency: 'PHP' }, value: 39085.71 },
+    { name: 'Net Amount-PHP', type: 'formula', value: 364800 },
+  ]] },
+  { name: 'Payment Details', type: 'fieldList', value: [
+    [{ name: 'Products', type: 'checkboxV2', value: ['A', 'B'] }, { name: 'Payment To', type: 'radioV2', value: 'Company Account' }],
+    [{ name: 'Products', type: 'checkboxV2', value: ['C'] }, { name: 'Payment To', type: 'radioV2', value: 'Employees Account' }],
+  ] },
+  { name: 'Total Amount-PHP', type: 'formula', value: 1887360 },
+  { name: 'Breakdown of Request', type: 'image', value: ['https://x/1.png?x-expires=1'] },
+  { name: 'PAF', type: 'attachmentV2', ext: 'a.pdf', value: ['https://x/a', 'https://x/b'] },
+  { name: 'Payment Schedule', type: 'image', value: [] },
+];
+
+test('extractFormFields matches Base formats', () => {
+  const f = extractFormFields(JSON.stringify(FORM));
+  assert.strictEqual(f['Related Approvals'], '202610060003');
+  assert.strictEqual(f['Payment Urgent'], 'Urgent');
+  assert.deepStrictEqual(f['Project Location'], ['ALBAY', 'CAMSUR']);
+  assert.strictEqual(f['Billing Start Date'], Date.parse('2026-09-01T00:00:00+08:00'));
+  assert.strictEqual(f['Billing End Date'], Date.parse('2026-09-30T00:00:00+08:00'));
+  assert.strictEqual(f['Duration'], '30');
+  assert.strictEqual(f['Due Date'], Date.parse('2026-10-29T00:00:00+08:00'));
+  // Same text the Base table holds for this request:
+  assert.strictEqual(f['Payment Details -Albay'], 'Project:SLI-PR | Payable Amount-Gross:364800.000000 PHP | 2307 Rate:0% | VAT Amount:39085.710000 PHP | Net Amount-PHP:364800.000000');
+  assert.strictEqual(f['Payment Details'], 'Products:A, B | Payment To:Company Account\nProducts:C | Payment To:Employees Account');
+  assert.strictEqual(f['Total Amount-PHP'], 1887360);
+  assert.strictEqual(f['Breakdown of Request'], '1 image(s)');
+  assert.strictEqual(f['PAF'], '2 attachment(s)');
+  assert.ok(!('Payment Schedule' in f), 'empty widgets are not emitted');
+  assert.deepStrictEqual(extractFormFields('not json'), {});
+});
+
+test('form values fill only empty cells; Base values are preserved', () => {
+  const sync = makeSync(fakeClient(), tmpState());
+  sync.loadState();
+  const header = ['Request No.', 'Status', 'PAF', 'Payment Urgent', 'Payment Details -Albay'];
+  const src = (code) => Buffer.from(`1:${code}:x:1`).toString('base64');
+  const records = [{ fields: { 'Request No.': { text: '001' }, SourceID: src('AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA'), PAF: '=HYPERLINK("L","1 attachment(s)")' } }];
+  const baseRow = (r) => header.map((h) => { const v = r.fields[h]; return v && typeof v === 'object' ? v.text : v || ''; });
+  const fields = extractFormFields(FORM);
+  const mk = (code, serial) => ({ code, serial, status: 'APPROVED', startTime: T0, endTime: T0 + 1, tasks: [], fields });
+  const rows = buildApprovalRows({
+    header, records, baseRow, approval: sync,
+    instances: [mk('AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA', '001'), mk('CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC', '003')],
+    formatValue: (n, v) => (Array.isArray(v) ? v.join(', ') : v),
+  });
+  const base = rows.find((r) => r[0] === '001');
+  const api = rows.find((r) => r[0] === '003');
+  assert.strictEqual(base[2], '=HYPERLINK("L","1 attachment(s)")'); // Base link kept
+  assert.strictEqual(base[3], 'Urgent'); // empty Base cell filled from form
+  assert.strictEqual(api[2], '2 attachment(s)');
+  assert.ok(api[4].startsWith('Project:SLI-PR | Payable Amount-Gross:364800.000000 PHP'));
+});
+
+test('unmapped nodes (Bank Handle, SI/OR) do not fill step columns', () => {
+  const sync = makeSync(fakeClient(), tmpState());
+  sync.loadState();
+  const t = Date.parse('2026-01-05T16:16:00+08:00');
+  const bankHandle = { status: 'APPROVED', tasks: [
+    { node: 'QB Handle', status: 'APPROVED', end: t - 1e8 }, { node: 'Bank Handle', status: 'APPROVED', end: t },
+  ] };
+  const cells = sync.cells(bankHandle);
+  assert.strictEqual(cells[1], ''); // Bank Maked
+  assert.strictEqual(cells[3], ''); // Bank Released
+  const siOr = { status: 'APPROVED', tasks: [
+    { node: 'QB Handle', status: 'APPROVED', end: t }, { node: 'Bank Maker', status: 'APPROVED', end: t },
+    { node: 'Bank Proofs/Approval', status: 'APPROVED', end: t }, { node: 'SI/OR and Bank Refund', status: 'APPROVED', end: t + 1e8 },
+  ] };
+  assert.strictEqual(sync.cells(siOr)[3], '2026-01-05 16:16'); // Bank Released stays the Bank Proofs time
+});

@@ -41,7 +41,12 @@ class SyncEngine {
     if (this.approval) {
       const extraCodes = records.map((r) => instanceCodeFromBase(r.fields)).filter(Boolean);
       const instances = await this.approval.sync({ extraCodes });
-      rows = buildApprovalRows({ header, records, instances, baseRow, approval: this.approval });
+      const fieldByName = new Map(fields.map((f) => [f.field_name, f]));
+      const formatValue = (name, raw) => {
+        const f = fieldByName.get(name);
+        return f ? toSheetValue(raw, f, this.timeZone) : toPlainValue(raw, null, this.timeZone);
+      };
+      rows = buildApprovalRows({ header, records, instances, baseRow, approval: this.approval, formatValue });
       header.push(...this.approval.columns);
     } else {
       rows = records.map(baseRow);
@@ -170,7 +175,7 @@ const APPROVAL_FIELD_COLUMNS = {
  * (matched by SourceID instance code, then by serial number). Base records with no matching
  * instance are kept as Base-only rows. Sorted newest first.
  */
-function buildApprovalRows({ header, records, instances, baseRow, approval }) {
+function buildApprovalRows({ header, records, instances, baseRow, approval, formatValue = (n, v) => v }) {
   const col = {};
   for (const [key, name] of Object.entries(APPROVAL_FIELD_COLUMNS)) col[key] = header.indexOf(name);
 
@@ -205,6 +210,14 @@ function buildApprovalRows({ header, records, instances, baseRow, approval }) {
     set('submitted', formatDateTime(inst.startTime, approval.timeZone));
     if (col.completed >= 0) row[col.completed] = formatDateTime(inst.endTime, approval.timeZone);
     if (col.requester >= 0 && !row[col.requester]) row[col.requester] = approval.requesterName(inst);
+
+    // Approval form values fill only empty cells, so existing Base values/links are preserved.
+    const formFields = inst.fields || {};
+    header.forEach((name, i) => {
+      if (row[i] !== '' && row[i] !== undefined && row[i] !== null) return;
+      if (!(name in formFields) || name === '_unmapped') return;
+      row[i] = formatValue(name, formFields[name]);
+    });
     out.push([...row, ...approval.cells(inst)]);
   }
 

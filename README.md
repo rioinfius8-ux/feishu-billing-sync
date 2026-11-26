@@ -74,7 +74,16 @@ When `APPROVAL_CODE` is set, the Feishu Approval API is the primary source of ro
    - `Completed at`
    - `Requester`, only if the Base record doesn't already have it
 
-   All other columns come from Base. Base records with no matching instance are kept as Base-only rows.
+   **Form fields.** Approval form widgets fill the column with the same name, but only cells that are still empty, so existing Base values and links are kept. They are converted to Base's formats:
+   - `fieldList` becomes `Name:value | …`, one line per row
+   - amounts become `364800.000000 PHP`
+   - `DateInterval` fills Billing Start Date, Billing End Date and Duration
+   - attachments and images become `N attachment(s)` or `N image(s)` (no link: the API's file URLs expire)
+   - Related Approvals gets the serial numbers
+
+   Old-form widgets with no matching column (`Payment Detials 01`, `Payment Details 02`, `Attachment`) are not mapped.
+
+   Base records with no matching instance are kept as Base-only rows.
 4. **Fills the step columns** from `APPROVAL_STEPS`:
    - Each step column shows the step's completion time, `Pending`, or blank if the step isn't in the flow.
    - `Status` is `Done` once every mapped step that appears in an approved instance is done. Otherwise it is `Pending`.
